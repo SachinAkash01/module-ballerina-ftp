@@ -1,0 +1,7 @@
+{
+  "name": "Test User",
+  "age": 30,
+  "email": "test@example.com",
+  "isActive": true,
+  "salary": 75000.50
+}

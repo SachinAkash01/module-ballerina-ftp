@@ -169,8 +169,12 @@ public final class FtpContentConverter {
                 }
             }
 
-            // Create record with values
-            records[i - 1] = createRecordValue((BMap<BString, Object>) recType, recordValues);
+            // Create record as a map - Ballerina runtime will handle type conversion
+            BMap<BString, Object> record = ValueCreator.createMapValue();
+            for (Map.Entry<String, Object> entry : recordValues.entrySet()) {
+                record.put(StringUtils.fromString(entry.getKey()), entry.getValue());
+            }
+            records[i - 1] = record;
         }
 
         return ValueCreator.createArrayValue(records, arrayType);

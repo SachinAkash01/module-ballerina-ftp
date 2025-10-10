@@ -19,14 +19,12 @@
 package io.ballerina.stdlib.ftp.server;
 
 import io.ballerina.runtime.api.creators.ValueCreator;
+import io.ballerina.runtime.api.utils.StringUtils;
 import io.ballerina.runtime.api.values.BArray;
 import io.ballerina.runtime.api.values.BMap;
 import io.ballerina.runtime.api.values.BString;
-import io.ballerina.stdlib.ftp.util.FtpUtil;
 
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
 
 /**
  * Iterator implementation for byte stream content callbacks.
@@ -81,20 +79,12 @@ public class ContentByteStreamIterator {
                 iterator.currentPosition + bytesToRead);
         iterator.currentPosition += bytesToRead;
 
-        // Create Ballerina byte array with proper readonly constraint
-        byte[] readonlyChunk = new byte[chunk.length];
-        System.arraycopy(chunk, 0, readonlyChunk, 0, chunk.length);
-        BArray ballerinaByteArray = ValueCreator.createArrayValue(readonlyChunk);
+        // Create Ballerina byte array
+        BArray ballerinaByteArray = ValueCreator.createArrayValue(chunk);
 
-        // Create the record {| byte[] & readonly value; |}
-        Map<String, Object> recordValues = new HashMap<>();
-        recordValues.put("value", ballerinaByteArray);
-
-        BMap<BString, Object> streamEntry = ValueCreator.createRecordValue(
-                FtpUtil.getFtpPackage(),
-                "ContentStreamEntry",
-                recordValues
-        );
+        // Create the record {| byte[] value; |} using map
+        BMap<BString, Object> streamEntry = ValueCreator.createMapValue();
+        streamEntry.put(StringUtils.fromString("value"), ballerinaByteArray);
 
         return streamEntry;
     }
