@@ -174,7 +174,7 @@ public class FtpListener implements RemoteFileSystemListener {
     }
 
     private void invokeMethodAsync(BObject service, Object ...args) {
-        Thread.startVirtualThread(() -> {
+        new Thread(() -> {
             try {
                 ObjectType serviceType = (ObjectType) TypeUtils.getReferredType(TypeUtils.getType(service));
                 boolean isConcurrentSafe = serviceType.isIsolated() &&
@@ -187,7 +187,7 @@ public class FtpListener implements RemoteFileSystemListener {
             } catch (BError error) {
                 error.printStackTrace();
             }
-        });
+        }).start();
 
     }
 

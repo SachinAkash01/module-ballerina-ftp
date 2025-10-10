@@ -111,7 +111,8 @@ public class FtpContentCallbackHandler {
      * Fetches file content from the remote FTP/SFTP server.
      */
     private byte[] fetchFileContentFromRemote(FileInfo fileInfo) throws Exception {
-        String fileUri = fileInfo.getUrl().getPath();
+        // Use full URI (with scheme, host, auth) to resolve via VFS, not just the path
+        String fileUri = fileInfo.getFileName().getURI();
         FileObject fileObject = null;
         InputStream inputStream = null;
 
@@ -151,7 +152,7 @@ public class FtpContentCallbackHandler {
             case ON_FILE_TEXT_REMOTE_FUNCTION:
                 return FtpContentConverter.convertBytesToString(fileContent);
             case ON_FILE_JSON_REMOTE_FUNCTION:
-                return FtpContentConverter.convertBytesToJson(fileContent);
+                return convertOnFileJsonContent(fileContent, methodType);
             case ON_FILE_XML_REMOTE_FUNCTION:
                 return FtpContentConverter.convertBytesToXml(fileContent);
             case ON_FILE_CSV_REMOTE_FUNCTION:
@@ -204,6 +205,21 @@ public class FtpContentCallbackHandler {
             return createByteStreamFromContent(fileContent);
         }
         return FtpContentConverter.convertBytesToCsvStringArray(fileContent);
+    }
+
+    /**
+     * Converts content for onFileJson method supporting both json and typed record.
+     */
+    private Object convertOnFileJsonContent(byte[] fileContent, MethodType methodType) throws Exception {
+        Parameter firstParameter = methodType.getParameters()[0];
+        Type firstParamType = TypeUtils.getReferredType(firstParameter.type);
+        switch (firstParamType.getTag()) {
+            case RECORD_TYPE_TAG:
+            case ARRAY_TAG:
+                return FtpContentConverter.convertBytesToTypedJson(fileContent, firstParamType);
+            default:
+                return FtpContentConverter.convertBytesToJson(fileContent);
+        }
     }
 
     /**
@@ -316,7 +332,7 @@ public class FtpContentCallbackHandler {
      * Invokes the content handler method asynchronously.
      */
     private void invokeContentMethodAsync(BObject service, String methodName, Object[] methodArguments) {
-        Thread.startVirtualThread(() -> {
+        new Thread(() -> {
             try {
                 ObjectType serviceType = (ObjectType) TypeUtils.getReferredType(TypeUtils.getType(service));
                 boolean isConcurrentSafe = serviceType.isIsolated() && serviceType.isIsolated(methodName);
@@ -332,6 +348,6 @@ public class FtpContentCallbackHandler {
             } catch (Exception exception) {
                 log.error("Error invoking content method: " + methodName, exception);
             }
-        });
+        }).start();
     }
 }

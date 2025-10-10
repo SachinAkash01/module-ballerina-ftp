@@ -263,9 +263,23 @@ public class FtpUtil {
      */
     public static Optional<MethodType> getContentHandlerMethod(BObject service) {
         MethodType[] methodTypes = ((ObjectType) TypeUtils.getReferredType(TypeUtils.getType(service))).getMethods();
-        return Stream.of(methodTypes)
-                .filter(methodType -> isContentHandlerMethodName(methodType.getName()))
-                .findFirst();
+        // Deterministic priority: onFile, onFileText, onFileJson, onFileXml, onFileCsv
+        String[] ordered = new String[] {
+                FtpConstants.ON_FILE_REMOTE_FUNCTION,
+                FtpConstants.ON_FILE_TEXT_REMOTE_FUNCTION,
+                FtpConstants.ON_FILE_JSON_REMOTE_FUNCTION,
+                FtpConstants.ON_FILE_XML_REMOTE_FUNCTION,
+                FtpConstants.ON_FILE_CSV_REMOTE_FUNCTION
+        };
+        for (String name : ordered) {
+            Optional<MethodType> m = Stream.of(methodTypes)
+                    .filter(mt -> name.equals(mt.getName()))
+                    .findFirst();
+            if (m.isPresent()) {
+                return m;
+            }
+        }
+        return Optional.empty();
     }
 
     /**

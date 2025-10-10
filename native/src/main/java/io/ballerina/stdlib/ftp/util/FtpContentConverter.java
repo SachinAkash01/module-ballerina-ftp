@@ -84,6 +84,21 @@ public final class FtpContentConverter {
     }
 
     /**
+     * Converts byte array JSON to a specific typed value (record/array) using Ballerina runtime conversion.
+     * Falls back to generic json on failure.
+     */
+    public static Object convertBytesToTypedJson(byte[] content, Type targetType) throws Exception {
+        String jsonString = new String(content, StandardCharsets.UTF_8);
+        Object json = JsonUtils.parse(jsonString);
+        try {
+            return io.ballerina.runtime.api.utils.JsonUtils.convertToType(json, targetType);
+        } catch (Throwable t) {
+            // Fallback to generic json
+            return json;
+        }
+    }
+
+    /**
      * Converts byte array to Ballerina XML.
      *
      * @param content The byte array content
@@ -170,7 +185,8 @@ public final class FtpContentConverter {
             }
 
             // Create record with values
-            records[i - 1] = createRecordValue((BMap<BString, Object>) recType, recordValues);
+            // Create record with values using module/type of the recordType
+            records[i - 1] = ValueCreator.createRecordValue((RecordType) recType, recordValues);
         }
 
         return ValueCreator.createArrayValue(records, arrayType);
