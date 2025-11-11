@@ -105,14 +105,10 @@ public class FtpServiceValidator {
         validateMethodExclusivity(context, serviceDeclarationNode, onFileChange, onFileDeleted,
                 contentMethods, contentMethodNames);
 
-        // onFileChange is deprecated - report a warning whenever used
-        if (onFileChange != null) {
-            context.reportDiagnostic(getDiagnostic(ON_FILE_CHANGE_DEPRECATED,
-                    DiagnosticSeverity.WARNING, onFileChange.location()));
-        }
-
         // Validate parameters based on which method type is present
         if (onFileChange != null && contentMethods.isEmpty() && onFileDeleted == null) {
+            context.reportDiagnostic(getDiagnostic(ON_FILE_CHANGE_DEPRECATED,
+                    DiagnosticSeverity.WARNING, onFileChange.location()));
             // Traditional onFileChange validation only
             new FtpFunctionValidator(context, onFileChange).validate();
         } else if (onFileChange == null && (!contentMethods.isEmpty() || onFileDeleted != null)) {
