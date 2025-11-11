@@ -353,7 +353,8 @@ public class FtpServiceValidationTest {
         DiagnosticResult diagnosticResult = compilation.diagnosticResult();
         Assert.assertEquals(diagnosticResult.errors().size(), 1);
         Diagnostic diagnostic = (Diagnostic) diagnosticResult.errors().toArray()[0];
-        assertDiagnostic(diagnostic, CONTENT_METHOD_MUST_BE_REMOTE);
+        assertDiagnostic(diagnostic, CONTENT_METHOD_MUST_BE_REMOTE,
+                "Content handler method 'onFileText' must be remote.");
     }
 
     @Test(description = "Validation when content method has invalid first parameter type")
@@ -363,7 +364,8 @@ public class FtpServiceValidationTest {
         DiagnosticResult diagnosticResult = compilation.diagnosticResult();
         Assert.assertEquals(diagnosticResult.errors().size(), 1);
         Diagnostic diagnostic = (Diagnostic) diagnosticResult.errors().toArray()[0];
-        assertDiagnostic(diagnostic, INVALID_CONTENT_PARAMETER_TYPE);
+        assertDiagnostic(diagnostic, INVALID_CONTENT_PARAMETER_TYPE,
+                "Invalid first parameter type for 'onFileJson'. Expected 'json or record type', found 'int'.");
     }
 
     @Test(description = "Validation when content method has invalid fileInfo parameter")
@@ -373,7 +375,8 @@ public class FtpServiceValidationTest {
         DiagnosticResult diagnosticResult = compilation.diagnosticResult();
         Assert.assertEquals(diagnosticResult.errors().size(), 1);
         Diagnostic diagnostic = (Diagnostic) diagnosticResult.errors().toArray()[0];
-        assertDiagnostic(diagnostic, INVALID_FILEINFO_PARAMETER);
+        assertDiagnostic(diagnostic, INVALID_FILEINFO_PARAMETER,
+                "Invalid fileInfo parameter for 'onFileText'. Only ftp:FileInfo is allowed.");
     }
 
     @Test(description = "Validation when content method defines too many parameters")
@@ -383,7 +386,9 @@ public class FtpServiceValidationTest {
         DiagnosticResult diagnosticResult = compilation.diagnosticResult();
         Assert.assertEquals(diagnosticResult.errors().size(), 1);
         Diagnostic diagnostic = (Diagnostic) diagnosticResult.errors().toArray()[0];
-        assertDiagnostic(diagnostic, TOO_MANY_PARAMETERS);
+        assertDiagnostic(diagnostic, TOO_MANY_PARAMETERS,
+                "Too many parameters for 'onFileCsv'. Content methods accept at most 3 parameters: " +
+                        "(content, fileInfo?, caller?).");
     }
 
     @Test(description = "Validation when content method caller parameter is invalid")
