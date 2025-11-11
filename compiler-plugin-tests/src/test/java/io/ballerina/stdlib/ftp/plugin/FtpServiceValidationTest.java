@@ -47,6 +47,9 @@ import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.O
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.RESOURCE_FUNCTION_NOT_ALLOWED;
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.TOO_MANY_PARAMETERS;
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.TOO_MANY_PARAMETERS_ON_FILE_DELETED;
+import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.ANNOTATION_PATTERN_NOT_SUBSET;
+import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.OVERLAPPING_ANNOTATION_PATTERNS;
+import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.INVALID_ANNOTATION_USAGE;
 
 /**
  * Tests for FTP package compiler plugin.
@@ -126,6 +129,14 @@ public class FtpServiceValidationTest {
     @Test(description = "Validation with generic onFile content handler")
     public void testValidContentService2() {
         Package currentPackage = loadPackage("valid_content_service_2");
+        PackageCompilation compilation = currentPackage.getCompilation();
+        DiagnosticResult diagnosticResult = compilation.diagnosticResult();
+        Assert.assertEquals(diagnosticResult.errors().size(), 0);
+    }
+
+    @Test(description = "Validation with FunctionConfig annotation override")
+    public void testValidContentService3() {
+        Package currentPackage = loadPackage("valid_content_service_3");
         PackageCompilation compilation = currentPackage.getCompilation();
         DiagnosticResult diagnosticResult = compilation.diagnosticResult();
         Assert.assertEquals(diagnosticResult.errors().size(), 0);
@@ -465,5 +476,35 @@ public class FtpServiceValidationTest {
         Assert.assertEquals(diagnosticResult.errors().size(), 1);
         Diagnostic diagnostic = (Diagnostic) diagnosticResult.errors().toArray()[0];
         assertDiagnostic(diagnostic, TOO_MANY_PARAMETERS_ON_FILE_DELETED);
+    }
+
+    @Test(description = "Validation when FunctionConfig annotation is used on a non-content method")
+    public void testInvalidAnnotationService1() {
+        Package currentPackage = loadPackage("invalid_annotation_service_1");
+        PackageCompilation compilation = currentPackage.getCompilation();
+        DiagnosticResult diagnosticResult = compilation.diagnosticResult();
+        Assert.assertEquals(diagnosticResult.errors().size(), 1);
+        Diagnostic diagnostic = (Diagnostic) diagnosticResult.errors().toArray()[0];
+        assertDiagnostic(diagnostic, INVALID_ANNOTATION_USAGE);
+    }
+
+    @Test(description = "Validation when FunctionConfig pattern is not a subset of listener pattern")
+    public void testInvalidAnnotationService2() {
+        Package currentPackage = loadPackage("invalid_annotation_service_2");
+        PackageCompilation compilation = currentPackage.getCompilation();
+        DiagnosticResult diagnosticResult = compilation.diagnosticResult();
+        Assert.assertEquals(diagnosticResult.errors().size(), 1);
+        Diagnostic diagnostic = (Diagnostic) diagnosticResult.errors().toArray()[0];
+        assertDiagnostic(diagnostic, ANNOTATION_PATTERN_NOT_SUBSET);
+    }
+
+    @Test(description = "Validation when FunctionConfig annotations have overlapping patterns")
+    public void testInvalidAnnotationService3() {
+        Package currentPackage = loadPackage("invalid_annotation_service_3");
+        PackageCompilation compilation = currentPackage.getCompilation();
+        DiagnosticResult diagnosticResult = compilation.diagnosticResult();
+        Assert.assertEquals(diagnosticResult.errors().size(), 1);
+        Diagnostic diagnostic = (Diagnostic) diagnosticResult.errors().toArray()[0];
+        assertDiagnostic(diagnostic, OVERLAPPING_ANNOTATION_PATTERNS);
     }
 }
