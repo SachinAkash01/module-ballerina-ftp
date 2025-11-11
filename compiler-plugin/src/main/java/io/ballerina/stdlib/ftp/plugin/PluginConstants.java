@@ -95,7 +95,9 @@ public final class PluginConstants {
         INVALID_ON_FILE_DELETED_CALLER_PARAMETER("Invalid second parameter for onFileDeleted. " +
                 "Only ftp:Caller is allowed.", "FTP_125"),
         TOO_MANY_PARAMETERS_ON_FILE_DELETED("Too many parameters. onFileDeleted accepts at most 2 parameters: " +
-                "(deletedFiles, caller?).", "FTP_126");
+                "(deletedFiles, caller?).", "FTP_126"),
+        ON_FILE_CHANGE_DEPRECATED("onFileChange method is deprecated. Use content handler methods or onFileDeleted.",
+                "FTP_127");
         private final String error;
         private final String errorCode;
 

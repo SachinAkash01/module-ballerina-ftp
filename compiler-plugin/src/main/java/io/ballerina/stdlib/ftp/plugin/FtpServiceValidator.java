@@ -38,6 +38,7 @@ import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.M
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.MULTIPLE_GENERIC_CONTENT_METHODS;
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.NO_ON_FILE_CHANGE;
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.RESOURCE_FUNCTION_NOT_ALLOWED;
+import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.ON_FILE_CHANGE_DEPRECATED;
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.ON_FILE_CHANGE_FUNC;
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.ON_FILE_CSV_FUNC;
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.ON_FILE_DELETED_FUNC;
@@ -103,6 +104,12 @@ public class FtpServiceValidator {
         // Validate method exclusivity rules
         validateMethodExclusivity(context, serviceDeclarationNode, onFileChange, onFileDeleted,
                 contentMethods, contentMethodNames);
+
+        // onFileChange is deprecated - report a warning whenever used
+        if (onFileChange != null) {
+            context.reportDiagnostic(getDiagnostic(ON_FILE_CHANGE_DEPRECATED,
+                    DiagnosticSeverity.WARNING, onFileChange.location()));
+        }
 
         // Validate parameters based on which method type is present
         if (onFileChange != null && contentMethods.isEmpty() && onFileDeleted == null) {

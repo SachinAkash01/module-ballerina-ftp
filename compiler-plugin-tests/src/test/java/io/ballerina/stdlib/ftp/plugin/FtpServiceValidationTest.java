@@ -22,6 +22,7 @@ import io.ballerina.projects.DiagnosticResult;
 import io.ballerina.projects.Package;
 import io.ballerina.projects.PackageCompilation;
 import io.ballerina.tools.diagnostics.Diagnostic;
+import io.ballerina.tools.diagnostics.DiagnosticSeverity;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
@@ -42,6 +43,7 @@ import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.M
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.NO_ON_FILE_CHANGE;
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.ONLY_PARAMS_ALLOWED;
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.ON_FILE_DELETED_MUST_BE_REMOTE;
+import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.ON_FILE_CHANGE_DEPRECATED;
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.RESOURCE_FUNCTION_NOT_ALLOWED;
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.TOO_MANY_PARAMETERS;
 import static io.ballerina.stdlib.ftp.plugin.PluginConstants.CompilationErrors.TOO_MANY_PARAMETERS_ON_FILE_DELETED;
@@ -97,6 +99,20 @@ public class FtpServiceValidationTest {
         PackageCompilation compilation = currentPackage.getCompilation();
         DiagnosticResult diagnosticResult = compilation.diagnosticResult();
         Assert.assertEquals(diagnosticResult.errors().size(), 0);
+    }
+
+    @Test(description = "Deprecation warning is emitted when onFileChange is used")
+    public void testOnFileChangeDeprecationWarning() {
+        Package currentPackage = loadPackage("valid_service_1");
+        PackageCompilation compilation = currentPackage.getCompilation();
+        DiagnosticResult diagnosticResult = compilation.diagnosticResult();
+        Diagnostic warning = diagnosticResult.diagnostics().stream()
+                .filter(diagnostic -> diagnostic.diagnosticInfo().severity() == DiagnosticSeverity.WARNING)
+                .findFirst()
+                .orElse(null);
+        Assert.assertNotNull(warning, "Expected a deprecation warning for onFileChange usage.");
+        assertDiagnostic(warning, ON_FILE_CHANGE_DEPRECATED,
+                "onFileChange method is deprecated. Use content handler methods or onFileDeleted.");
     }
 
     @Test(description = "Validation with content listener methods and onFileDeleted handler")
