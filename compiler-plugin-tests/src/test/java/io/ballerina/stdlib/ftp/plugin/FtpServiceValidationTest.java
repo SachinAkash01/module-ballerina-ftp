@@ -146,6 +146,14 @@ public class FtpServiceValidationTest {
         Assert.assertEquals(diagnosticResult.errors().size(), 0);
     }
 
+    @Test(description = "Validation with onFile using byte[] content")
+    public void testValidContentService5() {
+        Package currentPackage = loadPackage("valid_content_service_5");
+        PackageCompilation compilation = currentPackage.getCompilation();
+        DiagnosticResult diagnosticResult = compilation.diagnosticResult();
+        Assert.assertEquals(diagnosticResult.errors().size(), 0);
+    }
+
     @Test(description = "Validation when no valid remote function is defined")
     public void testInvalidService1() {
         Package currentPackage = loadPackage("invalid_service_1");
@@ -514,5 +522,49 @@ public class FtpServiceValidationTest {
         assertDiagnostic(diagnostic, INVALID_CONTENT_PARAMETER_TYPE,
                 "Invalid first parameter type for onFileCsv. Expected string[][], record{}[], " +
                         "or stream<string[], error?>, found stream<int[], error?>.");
+    }
+
+    @Test(description = "Validation when onFileText omits the required content parameter")
+    public void testInvalidContentService14() {
+        Package currentPackage = loadPackage("invalid_content_service_14");
+        PackageCompilation compilation = currentPackage.getCompilation();
+        DiagnosticResult diagnosticResult = compilation.diagnosticResult();
+        Assert.assertEquals(diagnosticResult.errors().size(), 1);
+        Diagnostic diagnostic = (Diagnostic) diagnosticResult.errors().toArray()[0];
+        assertDiagnostic(diagnostic, INVALID_CONTENT_PARAMETER_TYPE,
+                "Invalid first parameter type for onFileText. Expected string, found none.");
+    }
+
+    @Test(description = "Validation when onFile content parameter is not byte[] or acceptable stream")
+    public void testInvalidContentService15() {
+        Package currentPackage = loadPackage("invalid_content_service_15");
+        PackageCompilation compilation = currentPackage.getCompilation();
+        DiagnosticResult diagnosticResult = compilation.diagnosticResult();
+        Assert.assertEquals(diagnosticResult.errors().size(), 1);
+        Diagnostic diagnostic = (Diagnostic) diagnosticResult.errors().toArray()[0];
+        assertDiagnostic(diagnostic, INVALID_CONTENT_PARAMETER_TYPE,
+                "Invalid first parameter type for onFile. Expected byte[] or stream<byte[], error?>, found string.");
+    }
+
+    @Test(description = "Validation when onFile content stream element type is invalid")
+    public void testInvalidContentService16() {
+        Package currentPackage = loadPackage("invalid_content_service_16");
+        PackageCompilation compilation = currentPackage.getCompilation();
+        DiagnosticResult diagnosticResult = compilation.diagnosticResult();
+        Assert.assertEquals(diagnosticResult.errors().size(), 1);
+        Diagnostic diagnostic = (Diagnostic) diagnosticResult.errors().toArray()[0];
+        assertDiagnostic(diagnostic, INVALID_CONTENT_PARAMETER_TYPE,
+                "Invalid first parameter type for onFile. Expected byte[] or stream<byte[], error?>, " +
+                        "found stream<int[], error?>.");
+    }
+
+    @Test(description = "Validation when onFileDeleted omits the deletedFiles parameter")
+    public void testInvalidContentService17() {
+        Package currentPackage = loadPackage("invalid_content_service_17");
+        PackageCompilation compilation = currentPackage.getCompilation();
+        DiagnosticResult diagnosticResult = compilation.diagnosticResult();
+        Assert.assertEquals(diagnosticResult.errors().size(), 1);
+        Diagnostic diagnostic = (Diagnostic) diagnosticResult.errors().toArray()[0];
+        assertDiagnostic(diagnostic, INVALID_ON_FILE_DELETED_PARAMETER);
     }
 }
