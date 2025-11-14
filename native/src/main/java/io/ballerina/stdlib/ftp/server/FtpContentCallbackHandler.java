@@ -21,17 +21,13 @@ package io.ballerina.stdlib.ftp.server;
 import io.ballerina.runtime.api.Module;
 import io.ballerina.runtime.api.Runtime;
 import io.ballerina.runtime.api.concurrent.StrandMetadata;
-import io.ballerina.runtime.api.creators.ErrorCreator;
-import io.ballerina.runtime.api.creators.TypeCreator;
 import io.ballerina.runtime.api.creators.ValueCreator;
-import io.ballerina.runtime.api.types.ArrayType;
 import io.ballerina.runtime.api.types.MethodType;
 import io.ballerina.runtime.api.types.ObjectType;
 import io.ballerina.runtime.api.types.Parameter;
-import io.ballerina.runtime.api.types.PredefinedTypes;
 import io.ballerina.runtime.api.types.StreamType;
 import io.ballerina.runtime.api.types.Type;
-import io.ballerina.runtime.api.utils.StringUtils;
+import io.ballerina.runtime.api.types.TypeTags;
 import io.ballerina.runtime.api.utils.TypeUtils;
 import io.ballerina.runtime.api.values.BError;
 import io.ballerina.runtime.api.values.BMap;
@@ -41,6 +37,7 @@ import io.ballerina.stdlib.ftp.transport.message.FileInfo;
 import io.ballerina.stdlib.ftp.transport.message.RemoteFileSystemEvent;
 import io.ballerina.stdlib.ftp.util.FtpConstants;
 import io.ballerina.stdlib.ftp.util.FtpContentConverter;
+import io.ballerina.stdlib.ftp.util.FtpStreamUtils;
 import io.ballerina.stdlib.ftp.util.FtpUtil;
 import io.ballerina.stdlib.ftp.util.ModuleUtils;
 import org.apache.commons.vfs2.FileObject;
@@ -49,7 +46,8 @@ import org.apache.commons.vfs2.FileSystemOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayInputStream;
+import java.io.FilterInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashMap;
 import java.util.List;
@@ -87,68 +85,41 @@ public class FtpContentCallbackHandler {
      * Routes each file to the appropriate content handler based on file extension and annotations.
      */
     public void processContentCallbacks(BObject service, RemoteFileSystemEvent event,
-                                        ContentMethodRouter router, BObject callerObject) {
+                                         ContentMethodRouter router, BObject callerObject) {
         List<FileInfo> addedFiles = event.getAddedFiles();
 
         for (FileInfo fileInfo : addedFiles) {
-            try {
-                // Route file to appropriate method
-                Optional<MethodType> methodTypeOpt = router.routeFile(fileInfo);
+            Optional<MethodType> methodTypeOpt = router.findMethodForFile(fileInfo);
+            if (methodTypeOpt.isEmpty()) {
+                log.error("No content handler method found for file: {}. Skipping content processing.",
+                        fileInfo.getPath());
+                continue;
+            }
 
-                if (methodTypeOpt.isEmpty()) {
-                    log.warn("No content handler method found for file: {}. Skipping content processing.",
-                            fileInfo.getPath());
+            InputStream contentStream = null;
+            boolean streamRetained = false;
+            try {
+                MethodType methodType = methodTypeOpt.get();
+                contentStream = openContentStream(fileInfo);
+
+                ConvertedContent convertedContent = convertFileContent(contentStream, methodType);
+                streamRetained = convertedContent.isStreamRetained();
+
+                Object conversionResult = convertedContent.getContent();
+                if (conversionResult instanceof BError error) {
+                    log.error("Failed to convert content for file {}: {}", fileInfo.getPath(),
+                            error.getErrorMessage().getValue());
                     continue;
                 }
 
-                MethodType methodType = methodTypeOpt.get();
-
-                // Fetch file content
-                byte[] fileContent = fetchFileContentFromRemote(fileInfo);
-
-                // Convert content based on method signature
-                Object convertedContent = convertFileContent(fileContent, methodType);
-
-                // Prepare method arguments
-                Object[] methodArguments = prepareContentMethodArguments(methodType, convertedContent,
+                Object[] methodArguments = prepareContentMethodArguments(methodType, conversionResult,
                         fileInfo, callerObject);
-
-                // Invoke method asynchronously
                 invokeContentMethodAsync(service, methodType.getName(), methodArguments);
-
             } catch (Exception exception) {
                 log.error("Failed to process file: " + fileInfo.getPath(), exception);
-                // Continue processing other files even if one fails
-            }
-        }
-    }
-
-    /**
-     * Fetches file content from the remote FTP/SFTP server.
-     */
-    private byte[] fetchFileContentFromRemote(FileInfo fileInfo) throws Exception {
-        // Use the path from fileInfo which contains the full URI (e.g., ftp://host/path/file.txt)
-        String fileUri = fileInfo.getPath();
-        FileObject fileObject = null;
-        InputStream inputStream = null;
-
-        try {
-            fileObject = fileSystemManager.resolveFile(fileUri, fileSystemOptions);
-            inputStream = fileObject.getContent().getInputStream();
-            return FtpContentConverter.convertInputStreamToByteArray(inputStream);
-        } finally {
-            if (inputStream != null) {
-                try {
-                    inputStream.close();
-                } catch (Exception e) {
-                    log.warn("Failed to close input stream", e);
-                }
-            }
-            if (fileObject != null) {
-                try {
-                    fileObject.close();
-                } catch (Exception e) {
-                    log.warn("Failed to close file object", e);
+            } finally {
+                if (!streamRetained) {
+                    closeQuietly(contentStream);
                 }
             }
         }
@@ -157,23 +128,25 @@ public class FtpContentCallbackHandler {
     /**
      * Converts file content to the appropriate Ballerina type based on the method signature.
      */
-    private Object convertFileContent(byte[] fileContent, MethodType methodType) throws Exception {
+    private ConvertedContent convertFileContent(InputStream contentStream, MethodType methodType) throws Exception {
         String methodName = methodType.getName();
         Parameter firstParameter = methodType.getParameters()[0];
         Type firstParamType = TypeUtils.getReferredType(firstParameter.type);
-        int firstParamTypeTag = firstParamType.getTag();
 
         switch (methodName) {
             case ON_FILE_REMOTE_FUNCTION:
-                return convertOnFileContent(fileContent, firstParamTypeTag);
+                return convertOnFileContent(contentStream, firstParamType);
             case ON_FILE_TEXT_REMOTE_FUNCTION:
-                return FtpContentConverter.convertBytesToString(fileContent);
+                return ConvertedContent.value(FtpContentConverter.convertBytesToString(
+                        FtpContentConverter.convertInputStreamToByteArray(contentStream)));
             case ON_FILE_JSON_REMOTE_FUNCTION:
-                return FtpContentConverter.convertBytesToJson(fileContent, firstParamType);
+                return ConvertedContent.value(FtpContentConverter.convertBytesToJson(
+                        FtpContentConverter.convertInputStreamToByteArray(contentStream), firstParamType));
             case ON_FILE_XML_REMOTE_FUNCTION:
-                return FtpContentConverter.convertBytesToXml(fileContent, firstParamType);
+                return ConvertedContent.value(FtpContentConverter.convertBytesToXml(
+                        FtpContentConverter.convertInputStreamToByteArray(contentStream), firstParamType));
             case ON_FILE_CSV_REMOTE_FUNCTION:
-                return convertOnFileCsvContent(fileContent, firstParamType);
+                return convertOnFileCsvContent(contentStream, firstParamType);
             default:
                 throw new IllegalArgumentException("Unknown content method: " + methodName);
         }
@@ -182,51 +155,83 @@ public class FtpContentCallbackHandler {
     /**
      * Converts content for onFile method (byte[] or stream).
      */
-    private Object convertOnFileContent(byte[] fileContent, int firstParamTypeTag) {
-        if (firstParamTypeTag == ARRAY_TAG) {
-            // Return as byte[]
-            return FtpContentConverter.convertToBallerinaByteArray(fileContent);
+    private ConvertedContent convertOnFileContent(InputStream contentStream, Type firstParamType) throws Exception {
+        Type effectiveType = TypeUtils.getReferredType(firstParamType);
+        if (effectiveType.getTag() == ARRAY_TAG) {
+            byte[] fileContent = FtpContentConverter.convertInputStreamToByteArray(contentStream);
+            return ConvertedContent.value(FtpContentConverter.convertToBallerinaByteArray(fileContent));
+        } else if (effectiveType.getTag() == TypeTags.STREAM_TAG && effectiveType instanceof StreamType streamType) {
+            Object streamValue = FtpStreamUtils.createStreamWithContent(contentStream, streamType.getConstrainedType(),
+                    false);
+            if (streamValue instanceof BError) {
+                return ConvertedContent.value(streamValue);
+            }
+            return ConvertedContent.stream(streamValue);
         }
-        // Return as stream<byte[], error?>
-        // Create a byte stream from the content
-        return createByteStreamFromContent(fileContent);
+
+        byte[] fileContent = FtpContentConverter.convertInputStreamToByteArray(contentStream);
+        return ConvertedContent.value(FtpContentConverter.convertToBallerinaByteArray(fileContent));
     }
 
     /**
      * Converts content for onFileCsv method (string[][], record array, or stream<string[], error?>).
      */
-    private Object convertOnFileCsvContent(byte[] fileContent, Type firstParamType) throws Exception {
-        int firstParamTypeTag = firstParamType.getTag();
-
-        if (firstParamTypeTag == ARRAY_TAG) {
-            // string[][] or record array
-            return FtpContentConverter.convertBytesToCsv(fileContent, firstParamType);
+    private ConvertedContent convertOnFileCsvContent(InputStream contentStream, Type firstParamType) throws Exception {
+        Type effectiveType = TypeUtils.getReferredType(firstParamType);
+        if (effectiveType.getTag() == ARRAY_TAG) {
+            byte[] fileContent = FtpContentConverter.convertInputStreamToByteArray(contentStream);
+            return ConvertedContent.value(FtpContentConverter.convertBytesToCsv(fileContent, effectiveType));
+        } else if (effectiveType.getTag() == TypeTags.STREAM_TAG && effectiveType instanceof StreamType streamType) {
+            Object streamValue = FtpStreamUtils.createStreamWithContent(contentStream, streamType.getConstrainedType(),
+                    true);
+            if (streamValue instanceof BError) {
+                return ConvertedContent.value(streamValue);
+            }
+            return ConvertedContent.stream(streamValue);
         }
-        // stream<string[], error?>
-        return FtpContentConverter.createCsvStreamFromContent(fileContent);
+
+        byte[] fileContent = FtpContentConverter.convertInputStreamToByteArray(contentStream);
+        return ConvertedContent.value(FtpContentConverter.convertBytesToCsv(fileContent, effectiveType));
     }
 
-
-    /**
-     * Creates a Ballerina byte stream from byte array content.
-     *
-     * @param content The byte array content
-     * @return Ballerina stream object of type stream<byte[], error?>
-     */
-    private Object createByteStreamFromContent(byte[] content) {
+    private InputStream openContentStream(FileInfo fileInfo) throws Exception {
+        String fileUri = fileInfo.getPath();
+        FileObject fileObject = fileSystemManager.resolveFile(fileUri, fileSystemOptions);
+        InputStream inputStream;
         try {
-            BObject contentByteStreamObject = ValueCreator.createObjectValue(
-                    ModuleUtils.getModule(), "ContentByteStream", null, null
-            );
-            InputStream inputStream = new ByteArrayInputStream(content);
-            contentByteStreamObject.addNativeData("Input_Stream", inputStream);
-            ArrayType byteArrayType = TypeCreator.createArrayType(PredefinedTypes.TYPE_BYTE);
-            StreamType streamType = TypeCreator.createStreamType(byteArrayType, PredefinedTypes.TYPE_NULL);
-            return ValueCreator.createStreamValue(streamType, contentByteStreamObject);
+            inputStream = fileObject.getContent().getInputStream();
         } catch (Exception e) {
-            log.error("Failed to create stream with content", e);
-            // Fallback to returning byte array if stream creation fails
-            return ErrorCreator.createError(StringUtils.fromString("Unable to create stream"), e);
+            try {
+                fileObject.close();
+            } catch (Exception closeException) {
+                log.warn("Failed to close file object after input stream acquisition failure", closeException);
+            }
+            throw e;
+        }
+        return new FilterInputStream(inputStream) {
+            @Override
+            public void close() throws IOException {
+                try {
+                    super.close();
+                } finally {
+                    try {
+                        fileObject.close();
+                    } catch (Exception e) {
+                        log.warn("Failed to close file object", e);
+                    }
+                }
+            }
+        };
+    }
+
+    private void closeQuietly(InputStream inputStream) {
+        if (inputStream == null) {
+            return;
+        }
+        try {
+            inputStream.close();
+        } catch (IOException e) {
+            log.warn("Failed to close input stream", e);
         }
     }
 
@@ -321,5 +326,31 @@ public class FtpContentCallbackHandler {
                 log.error("Error invoking content method: " + methodName, exception);
             }
         });
+    }
+
+    private static final class ConvertedContent {
+        private final Object content;
+        private final boolean streamRetained;
+
+        private ConvertedContent(Object content, boolean streamRetained) {
+            this.content = content;
+            this.streamRetained = streamRetained;
+        }
+
+        static ConvertedContent value(Object content) {
+            return new ConvertedContent(content, false);
+        }
+
+        static ConvertedContent stream(Object content) {
+            return new ConvertedContent(content, true);
+        }
+
+        Object getContent() {
+            return content;
+        }
+
+        boolean isStreamRetained() {
+            return streamRetained;
+        }
     }
 }

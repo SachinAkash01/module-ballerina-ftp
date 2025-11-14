@@ -99,36 +99,31 @@ public class FtpListener implements RemoteFileSystemListener {
 
             if (runtime != null) {
                 for (BObject service : registeredServices.values()) {
-                    // Create router to handle content method selection
-                    ContentMethodRouter router = new ContentMethodRouter(service);
-
-                    // Check for onFileDeleted method
+                    boolean hasContentHandlers = FtpUtil.hasContentHandlerMethods(service);
                     Optional<MethodType> onFileDeletedMethodType = getOnFileDeletedMethod(service);
+                    Optional<MethodType> onFileChangeMethodType = getOnFileChangeMethod(service);
 
-                    // Check if any content handler methods are available
-                    if (router.hasContentMethods()) {
-                        // Process content-based callbacks with routing (includes added files and deleted files)
-                        processContentBasedCallbacks(service, event, router);
+                    if (hasContentHandlers) {
+                        ContentMethodRouter router = new ContentMethodRouter(service);
+                        processContentBasedCallbacks(service, event, router, onFileDeletedMethodType);
                     } else if (onFileDeletedMethodType.isPresent()) {
-                        // Service has only onFileDeleted method (no content methods)
-                        // Process deleted files directly
                         if (!event.getDeletedFiles().isEmpty()) {
                             processFileDeletedCallback(service, event, onFileDeletedMethodType.get());
                         }
-                        // For added files, fall back to onFileChange if present
                         if (!event.getAddedFiles().isEmpty()) {
-                            Optional<MethodType> onFileChangeMethodType = getOnFileChangeMethod(service);
                             if (onFileChangeMethodType.isPresent()) {
                                 processMetadataOnlyCallbacks(service, event, onFileChangeMethodType.get());
+                            } else {
+                                log.warn("Added files detected but no onFileChange remote function available in service");
                             }
                         }
                     } else {
-                        // Fall back to traditional onFileChange
-                        Optional<MethodType> onFileChangeMethodType = getOnFileChangeMethod(service);
                         if (onFileChangeMethodType.isPresent()) {
                             processMetadataOnlyCallbacks(service, event, onFileChangeMethodType.get());
                         } else {
-                            log.error("No valid remote method found in service");
+                            Type serviceType = TypeUtils.getType(service);
+                            String serviceName = serviceType != null ? serviceType.getName() : "<anonymous>";
+                            log.error("No valid remote method found in service '{}'", serviceName);
                         }
                     }
                 }
@@ -145,7 +140,8 @@ public class FtpListener implements RemoteFileSystemListener {
      * Also handles file deletion events via onFileDeleted method if available.
      */
     private void processContentBasedCallbacks(BObject service, RemoteFileSystemEvent event,
-                                              ContentMethodRouter router) {
+                                              ContentMethodRouter router,
+                                              Optional<MethodType> onFileDeletedMethodType) {
         // Process added files with content methods
         if (!event.getAddedFiles().isEmpty()) {
             if (fileSystemManager == null || fileSystemOptions == null) {
@@ -164,7 +160,6 @@ public class FtpListener implements RemoteFileSystemListener {
 
         // Process deleted files with onFileDeleted method if available
         if (!event.getDeletedFiles().isEmpty()) {
-            Optional<MethodType> onFileDeletedMethodType = getOnFileDeletedMethod(service);
             if (onFileDeletedMethodType.isPresent()) {
                 processFileDeletedCallback(service, event, onFileDeletedMethodType.get());
             } else {

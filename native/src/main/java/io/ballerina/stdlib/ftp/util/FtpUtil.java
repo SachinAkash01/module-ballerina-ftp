@@ -299,6 +299,16 @@ public class FtpUtil {
     }
 
     /**
+     * Checks whether the given service defines at least one content handler method.
+     *
+     * @param service The BObject service
+     * @return true if any of the content handler methods are present
+     */
+    public static boolean hasContentHandlerMethods(BObject service) {
+        return getAllContentHandlerMethods(service).length > 0;
+    }
+
+    /**
      * Finds a specific content handler method by name from a service.
      *
      * @param service The BObject service

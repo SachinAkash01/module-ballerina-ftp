@@ -78,15 +78,18 @@ public final class FtpContentConverter {
 
             Object result = io.ballerina.lib.data.jsondata.json.Native.parseBytes(byteArray, options, typedesc);
 
-            if (result instanceof BError) {
-                log.error("Failed to parse JSON content: {}", ((BError) result).getMessage());
-                return result;
+            if (result instanceof BError bError) {
+                String message = bError.getErrorMessage() != null
+                        ? bError.getErrorMessage().getValue()
+                        : "Unknown JSON parsing error";
+                log.error("Failed to parse JSON content: {}", message);
+                return FtpUtil.createError("Failed to parse JSON content: " + message, bError, Error.errorType());
             }
 
             return result;
         } catch (Exception e) {
             log.error("Error converting bytes to JSON", e);
-            return FtpUtil.createError("Failed to parse JSON content: " + e.getMessage(), Error.errorType());
+            return FtpUtil.createError("Failed to parse JSON content: " + e.getMessage(), e, Error.errorType());
         }
     }
 
@@ -107,13 +110,17 @@ public final class FtpContentConverter {
 
             Object result = io.ballerina.lib.data.xmldata.xml.Native.parseBytes(byteArray, options, typedesc);
 
-            if (result instanceof BError) {
-                return result;
+            if (result instanceof BError bError) {
+                String message = bError.getErrorMessage() != null
+                        ? bError.getErrorMessage().getValue()
+                        : "Unknown XML parsing error";
+                log.error("Failed to parse XML content: {}", message);
+                return FtpUtil.createError("Failed to parse XML content: " + message, bError, Error.errorType());
             }
 
             return result;
         } catch (Exception e) {
-            return FtpUtil.createError("Failed to parse XML content: " + e.getMessage(), Error.errorType());
+            return FtpUtil.createError("Failed to parse XML content: " + e.getMessage(), e, Error.errorType());
         }
     }
 
@@ -134,15 +141,18 @@ public final class FtpContentConverter {
 
             Object result = io.ballerina.lib.data.csvdata.csv.Native.parseBytes(byteArray, options, typedesc);
 
-            if (result instanceof BError) {
-                log.error("Failed to parse CSV content: {}", ((BError) result).getMessage());
-                return result;
+            if (result instanceof BError bError) {
+                String message = bError.getErrorMessage() != null
+                        ? bError.getErrorMessage().getValue()
+                        : "Unknown CSV parsing error";
+                log.error("Failed to parse CSV content: {}", message);
+                return FtpUtil.createError("Failed to parse CSV content: " + message, bError, Error.errorType());
             }
 
             return result;
         } catch (Exception e) {
             log.error("Error converting bytes to CSV", e);
-            return FtpUtil.createError("Failed to parse CSV content: " + e.getMessage(), Error.errorType());
+            return FtpUtil.createError("Failed to parse CSV content: " + e.getMessage(), e, Error.errorType());
         }
     }
 
@@ -241,9 +251,13 @@ public final class FtpContentConverter {
 
             Object result = io.ballerina.lib.data.csvdata.csv.Native.parseBytes(byteArray, options, typedesc);
 
-            if (result instanceof BError) {
-                log.error("Failed to parse CSV content for stream: {}", ((BError) result).getMessage());
-                return result;
+            if (result instanceof BError bError) {
+                String message = bError.getErrorMessage() != null
+                        ? bError.getErrorMessage().getValue()
+                        : "Unknown CSV parsing error";
+                log.error("Failed to parse CSV content for stream: {}", message);
+                return FtpUtil.createError("Failed to parse CSV content for stream: " + message, bError,
+                        Error.errorType());
             }
 
             // Create ContentCsvStream object and initialize with parsed data

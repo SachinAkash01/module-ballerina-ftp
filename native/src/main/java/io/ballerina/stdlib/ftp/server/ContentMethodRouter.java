@@ -81,13 +81,13 @@ public class ContentMethodRouter {
     }
 
     /**
-     * Routes a file to the appropriate content handler method.
-     * Priority: Annotation override > Extension mapping > Generic onFile > onFileChange fallback
+     * Determines the most suitable content handler method for the provided file.
+     * Priority: Annotation override > Extension mapping > Generic onFile
      *
      * @param fileInfo The file information
      * @return Optional containing the MethodType to invoke, or empty if no suitable method found
      */
-    public Optional<MethodType> routeFile(FileInfo fileInfo) {
+    public Optional<MethodType> findMethodForFile(FileInfo fileInfo) {
         String fileName = fileInfo.getFileName().getBaseName();
         String extension = fileInfo.getFileName().getExtension();
 
