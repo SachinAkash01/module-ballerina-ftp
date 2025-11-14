@@ -21,14 +21,10 @@ package io.ballerina.stdlib.ftp.server;
 import io.ballerina.runtime.api.Module;
 import io.ballerina.runtime.api.Runtime;
 import io.ballerina.runtime.api.concurrent.StrandMetadata;
-import io.ballerina.runtime.api.creators.ErrorCreator;
-import io.ballerina.runtime.api.creators.TypeCreator;
 import io.ballerina.runtime.api.creators.ValueCreator;
-import io.ballerina.runtime.api.types.ArrayType;
 import io.ballerina.runtime.api.types.MethodType;
 import io.ballerina.runtime.api.types.ObjectType;
 import io.ballerina.runtime.api.types.Parameter;
-import io.ballerina.runtime.api.types.PredefinedTypes;
 import io.ballerina.runtime.api.types.StreamType;
 import io.ballerina.runtime.api.types.Type;
 import io.ballerina.runtime.api.utils.StringUtils;
@@ -41,15 +37,16 @@ import io.ballerina.stdlib.ftp.transport.message.FileInfo;
 import io.ballerina.stdlib.ftp.transport.message.RemoteFileSystemEvent;
 import io.ballerina.stdlib.ftp.util.FtpConstants;
 import io.ballerina.stdlib.ftp.util.FtpContentConverter;
+import io.ballerina.stdlib.ftp.util.FtpStreamHelper;
 import io.ballerina.stdlib.ftp.util.FtpUtil;
-import io.ballerina.stdlib.ftp.util.ModuleUtils;
 import org.apache.commons.vfs2.FileObject;
 import org.apache.commons.vfs2.FileSystemManager;
 import org.apache.commons.vfs2.FileSystemOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayInputStream;
+import java.io.FilterInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashMap;
 import java.util.List;
@@ -59,6 +56,7 @@ import java.util.Optional;
 import static io.ballerina.runtime.api.types.TypeTags.ARRAY_TAG;
 import static io.ballerina.runtime.api.types.TypeTags.OBJECT_TYPE_TAG;
 import static io.ballerina.runtime.api.types.TypeTags.RECORD_TYPE_TAG;
+import static io.ballerina.runtime.api.types.TypeTags.STREAM_TAG;
 import static io.ballerina.stdlib.ftp.util.FtpConstants.ON_FILE_CSV_REMOTE_FUNCTION;
 import static io.ballerina.stdlib.ftp.util.FtpConstants.ON_FILE_JSON_REMOTE_FUNCTION;
 import static io.ballerina.stdlib.ftp.util.FtpConstants.ON_FILE_REMOTE_FUNCTION;
@@ -74,12 +72,14 @@ public class FtpContentCallbackHandler {
     private final Runtime ballerinaRuntime;
     private final FileSystemManager fileSystemManager;
     private final FileSystemOptions fileSystemOptions;
+    private final boolean laxDataBinding;
 
     public FtpContentCallbackHandler(Runtime ballerinaRuntime, FileSystemManager fileSystemManager,
-                                     FileSystemOptions fileSystemOptions) {
+                                     FileSystemOptions fileSystemOptions, boolean laxDataBinding) {
         this.ballerinaRuntime = ballerinaRuntime;
         this.fileSystemManager = fileSystemManager;
         this.fileSystemOptions = fileSystemOptions;
+        this.laxDataBinding = laxDataBinding;
     }
 
     /**
@@ -93,7 +93,7 @@ public class FtpContentCallbackHandler {
         for (FileInfo fileInfo : addedFiles) {
             try {
                 // Route file to appropriate method
-                Optional<MethodType> methodTypeOpt = router.routeFile(fileInfo);
+                Optional<MethodType> methodTypeOpt = router.findTargetMethod(fileInfo);
 
                 if (methodTypeOpt.isEmpty()) {
                     log.warn("No content handler method found for file: {}. Skipping content processing.",
@@ -103,19 +103,24 @@ public class FtpContentCallbackHandler {
 
                 MethodType methodType = methodTypeOpt.get();
 
-                // Fetch file content
-                byte[] fileContent = fetchFileContentFromRemote(fileInfo);
+                RemoteFileContent remoteContent = null;
+                try {
+                    remoteContent = openRemoteFile(fileInfo);
 
-                // Convert content based on method signature
-                Object convertedContent = convertFileContent(fileContent, methodType);
+                    // Convert content based on method signature
+                    Object convertedContent = convertFileContent(remoteContent, methodType);
 
-                // Prepare method arguments
-                Object[] methodArguments = prepareContentMethodArguments(methodType, convertedContent,
-                        fileInfo, callerObject);
+                    // Prepare method arguments
+                    Object[] methodArguments = prepareContentMethodArguments(methodType, convertedContent,
+                            fileInfo, callerObject);
 
-                // Invoke method asynchronously
-                invokeContentMethodAsync(service, methodType.getName(), methodArguments);
-
+                    // Invoke method asynchronously
+                    invokeContentMethodAsync(service, methodType.getName(), methodArguments);
+                } finally {
+                    if (remoteContent != null) {
+                        remoteContent.close();
+                    }
+                }
             } catch (Exception exception) {
                 log.error("Failed to process file: " + fileInfo.getPath(), exception);
                 // Continue processing other files even if one fails
@@ -124,110 +129,64 @@ public class FtpContentCallbackHandler {
     }
 
     /**
-     * Fetches file content from the remote FTP/SFTP server.
+     * Opens the remote file for streaming/reading.
      */
-    private byte[] fetchFileContentFromRemote(FileInfo fileInfo) throws Exception {
-        // Use the path from fileInfo which contains the full URI (e.g., ftp://host/path/file.txt)
+    private RemoteFileContent openRemoteFile(FileInfo fileInfo) throws Exception {
         String fileUri = fileInfo.getPath();
-        FileObject fileObject = null;
-        InputStream inputStream = null;
-
-        try {
-            fileObject = fileSystemManager.resolveFile(fileUri, fileSystemOptions);
-            inputStream = fileObject.getContent().getInputStream();
-            return FtpContentConverter.convertInputStreamToByteArray(inputStream);
-        } finally {
-            if (inputStream != null) {
-                try {
-                    inputStream.close();
-                } catch (Exception e) {
-                    log.warn("Failed to close input stream", e);
-                }
-            }
-            if (fileObject != null) {
-                try {
-                    fileObject.close();
-                } catch (Exception e) {
-                    log.warn("Failed to close file object", e);
-                }
-            }
-        }
+        FileObject fileObject = fileSystemManager.resolveFile(fileUri, fileSystemOptions);
+        InputStream inputStream = fileObject.getContent().getInputStream();
+        return new RemoteFileContent(fileObject, inputStream);
     }
 
     /**
      * Converts file content to the appropriate Ballerina type based on the method signature.
      */
-    private Object convertFileContent(byte[] fileContent, MethodType methodType) throws Exception {
+    private Object convertFileContent(RemoteFileContent remoteContent, MethodType methodType) throws Exception {
         String methodName = methodType.getName();
         Parameter firstParameter = methodType.getParameters()[0];
         Type firstParamType = TypeUtils.getReferredType(firstParameter.type);
-        int firstParamTypeTag = firstParamType.getTag();
 
         switch (methodName) {
             case ON_FILE_REMOTE_FUNCTION:
-                return convertOnFileContent(fileContent, firstParamTypeTag);
+                return convertOnFileContent(remoteContent, firstParamType);
             case ON_FILE_TEXT_REMOTE_FUNCTION:
-                return FtpContentConverter.convertBytesToString(fileContent);
+                return FtpContentConverter.convertBytesToString(remoteContent.readAllBytes());
             case ON_FILE_JSON_REMOTE_FUNCTION:
-                return FtpContentConverter.convertBytesToJson(fileContent, firstParamType);
+                return FtpContentConverter.convertBytesToJson(remoteContent.readAllBytes(), firstParamType,
+                        laxDataBinding);
             case ON_FILE_XML_REMOTE_FUNCTION:
-                return FtpContentConverter.convertBytesToXml(fileContent, firstParamType);
+                return FtpContentConverter.convertBytesToXml(remoteContent.readAllBytes(), firstParamType,
+                        laxDataBinding);
             case ON_FILE_CSV_REMOTE_FUNCTION:
-                return convertOnFileCsvContent(fileContent, firstParamType);
+                return convertOnFileCsvContent(remoteContent, firstParamType);
             default:
                 throw new IllegalArgumentException("Unknown content method: " + methodName);
         }
     }
 
-    /**
-     * Converts content for onFile method (byte[] or stream).
-     */
-    private Object convertOnFileContent(byte[] fileContent, int firstParamTypeTag) {
-        if (firstParamTypeTag == ARRAY_TAG) {
-            // Return as byte[]
-            return FtpContentConverter.convertToBallerinaByteArray(fileContent);
+    private Object convertOnFileContent(RemoteFileContent remoteContent, Type firstParamType) throws Exception {
+        int typeTag = firstParamType.getTag();
+        if (typeTag == ARRAY_TAG) {
+            return FtpContentConverter.convertToBallerinaByteArray(remoteContent.readAllBytes());
+        } else if (typeTag == STREAM_TAG) {
+            StreamType streamType = (StreamType) firstParamType;
+            InputStream contentStream = remoteContent.detachStream();
+            return FtpStreamHelper.createStreamWithContent(contentStream, streamType.getConstrainedType(),
+                    laxDataBinding);
         }
-        // Return as stream<byte[], error?>
-        // Create a byte stream from the content
-        return createByteStreamFromContent(fileContent);
+        throw new IllegalArgumentException("Unsupported parameter type for onFile method");
     }
 
-    /**
-     * Converts content for onFileCsv method (string[][], record array, or stream<string[], error?>).
-     */
-    private Object convertOnFileCsvContent(byte[] fileContent, Type firstParamType) throws Exception {
-        int firstParamTypeTag = firstParamType.getTag();
-
-        if (firstParamTypeTag == ARRAY_TAG) {
-            // string[][] or record array
-            return FtpContentConverter.convertBytesToCsv(fileContent, firstParamType);
+    private Object convertOnFileCsvContent(RemoteFileContent remoteContent, Type firstParamType) throws Exception {
+        int typeTag = firstParamType.getTag();
+        if (typeTag == ARRAY_TAG) {
+            return FtpContentConverter.convertBytesToCsv(remoteContent.readAllBytes(), firstParamType, laxDataBinding);
+        } else if (typeTag == STREAM_TAG) {
+            StreamType streamType = (StreamType) firstParamType;
+            InputStream csvStream = remoteContent.detachStream();
+            return FtpStreamHelper.createStreamWithContent(csvStream, streamType.getConstrainedType(), laxDataBinding);
         }
-        // stream<string[], error?>
-        return FtpContentConverter.createCsvStreamFromContent(fileContent);
-    }
-
-
-    /**
-     * Creates a Ballerina byte stream from byte array content.
-     *
-     * @param content The byte array content
-     * @return Ballerina stream object of type stream<byte[], error?>
-     */
-    private Object createByteStreamFromContent(byte[] content) {
-        try {
-            BObject contentByteStreamObject = ValueCreator.createObjectValue(
-                    ModuleUtils.getModule(), "ContentByteStream", null, null
-            );
-            InputStream inputStream = new ByteArrayInputStream(content);
-            contentByteStreamObject.addNativeData("Input_Stream", inputStream);
-            ArrayType byteArrayType = TypeCreator.createArrayType(PredefinedTypes.TYPE_BYTE);
-            StreamType streamType = TypeCreator.createStreamType(byteArrayType, PredefinedTypes.TYPE_NULL);
-            return ValueCreator.createStreamValue(streamType, contentByteStreamObject);
-        } catch (Exception e) {
-            log.error("Failed to create stream with content", e);
-            // Fallback to returning byte array if stream creation fails
-            return ErrorCreator.createError(StringUtils.fromString("Unable to create stream"), e);
-        }
+        throw new IllegalArgumentException("Unsupported parameter type for onFileCsv method");
     }
 
     /**
@@ -321,5 +280,80 @@ public class FtpContentCallbackHandler {
                 log.error("Error invoking content method: " + methodName, exception);
             }
         });
+    }
+
+    /**
+     * Wrapper around remote file content that manages lifecycle of FileObject/InputStream.
+     */
+    private static final class RemoteFileContent implements AutoCloseable {
+
+        private final FileObject fileObject;
+        private final InputStream inputStream;
+        private boolean streamDetached;
+
+        private RemoteFileContent(FileObject fileObject, InputStream inputStream) {
+            this.fileObject = fileObject;
+            this.inputStream = inputStream;
+        }
+
+        byte[] readAllBytes() throws IOException {
+            try {
+                return FtpContentConverter.convertInputStreamToByteArray(inputStream);
+            } catch (Exception e) {
+                if (e instanceof IOException) {
+                    throw (IOException) e;
+                }
+                throw new IOException("Failed to read remote content", e);
+            }
+        }
+
+        InputStream detachStream() {
+            if (streamDetached) {
+                throw new IllegalStateException("Input stream already detached");
+            }
+            streamDetached = true;
+            return new FilterInputStream(inputStream) {
+                @Override
+                public void close() throws IOException {
+                    IOException error = null;
+                    try {
+                        super.close();
+                    } catch (IOException e) {
+                        error = e;
+                    }
+                    try {
+                        fileObject.close();
+                    } catch (Exception e) {
+                        if (error == null) {
+                            if (e instanceof IOException) {
+                                error = (IOException) e;
+                            } else {
+                                error = new IOException("Failed to close file object", e);
+                            }
+                        }
+                    }
+                    if (error != null) {
+                        throw error;
+                    }
+                }
+            };
+        }
+
+        @Override
+        public void close() {
+            if (streamDetached) {
+                return;
+            }
+            try {
+                inputStream.close();
+            } catch (IOException e) {
+                log.warn("Failed to close input stream", e);
+            }
+            try {
+                fileObject.close();
+            } catch (Exception e) {
+                log.warn("Failed to close file object", e);
+            }
+        }
     }
 }

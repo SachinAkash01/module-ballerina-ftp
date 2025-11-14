@@ -49,18 +49,20 @@ public class ContentMethodRouter {
     private final Map<String, MethodType> availableContentMethods;
 
     public ContentMethodRouter(BObject service) {
+        this(service, FtpUtil.getAllContentHandlerMethods(service));
+    }
+
+    public ContentMethodRouter(BObject service, MethodType[] contentMethods) {
         this.service = service;
         this.annotationPatternToMethod = new HashMap<>();
         this.availableContentMethods = new HashMap<>();
-        initializeMethodMappings();
+        initializeMethodMappings(contentMethods);
     }
 
     /**
      * Initializes method mappings by scanning all content methods and their annotations.
      */
-    private void initializeMethodMappings() {
-        MethodType[] contentMethods = FtpUtil.getAllContentHandlerMethods(service);
-
+    private void initializeMethodMappings(MethodType[] contentMethods) {
         for (MethodType method : contentMethods) {
             String methodName = method.getName();
             availableContentMethods.put(methodName, method);
@@ -81,13 +83,13 @@ public class ContentMethodRouter {
     }
 
     /**
-     * Routes a file to the appropriate content handler method.
+     * Finds the best matching content handler method for the given file.
      * Priority: Annotation override > Extension mapping > Generic onFile > onFileChange fallback
      *
      * @param fileInfo The file information
      * @return Optional containing the MethodType to invoke, or empty if no suitable method found
      */
-    public Optional<MethodType> routeFile(FileInfo fileInfo) {
+    public Optional<MethodType> findTargetMethod(FileInfo fileInfo) {
         String fileName = fileInfo.getFileName().getBaseName();
         String extension = fileInfo.getFileName().getExtension();
 
@@ -117,7 +119,8 @@ public class ContentMethodRouter {
         }
 
         // Priority 4: No content method available - will fall back to onFileChange in caller
-        log.debug("No content handler found for file '{}', will fall back to onFileChange", fileName);
+        log.error("No content handler found for file '{}'. Ensure a compatible onFile/onFile* method is defined.",
+                fileName);
         return Optional.empty();
     }
 
@@ -167,12 +170,4 @@ public class ContentMethodRouter {
         return Optional.empty();
     }
 
-    /**
-     * Checks if any content handler methods are available.
-     *
-     * @return true if at least one content method is available
-     */
-    public boolean hasContentMethods() {
-        return !availableContentMethods.isEmpty();
-    }
 }

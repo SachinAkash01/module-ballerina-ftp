@@ -75,10 +75,12 @@ public class FtpListener implements RemoteFileSystemListener {
 
     private static final Logger log = LoggerFactory.getLogger(FtpListener.class);
     private final Runtime runtime;
-    private Map<String, BObject> registeredServices = new HashMap<>();
+    private Map<String, ServiceRegistration> registeredServices = new HashMap<>();
     private BObject caller;
     private FileSystemManager fileSystemManager;
     private FileSystemOptions fileSystemOptions;
+    private volatile FtpContentCallbackHandler contentCallbackHandler;
+    private boolean laxDataBinding;
 
     FtpListener(Runtime runtime) {
         this.runtime = runtime;
@@ -92,44 +94,40 @@ public class FtpListener implements RemoteFileSystemListener {
         this.fileSystemOptions = fileSystemOptions;
     }
 
+    public void setLaxDataBinding(boolean laxDataBinding) {
+        this.laxDataBinding = laxDataBinding;
+    }
+
     @Override
     public boolean onMessage(RemoteFileSystemBaseMessage remoteFileSystemBaseMessage) {
         if (remoteFileSystemBaseMessage instanceof RemoteFileSystemEvent) {
             RemoteFileSystemEvent event = (RemoteFileSystemEvent) remoteFileSystemBaseMessage;
 
             if (runtime != null) {
-                for (BObject service : registeredServices.values()) {
-                    // Create router to handle content method selection
-                    ContentMethodRouter router = new ContentMethodRouter(service);
+                for (ServiceRegistration registration : registeredServices.values()) {
+                    BObject service = registration.getService();
 
-                    // Check for onFileDeleted method
-                    Optional<MethodType> onFileDeletedMethodType = getOnFileDeletedMethod(service);
+                    if (registration.hasContentMethods()) {
+                        ContentMethodRouter router = registration.getOrCreateRouter();
+                        processContentBasedCallbacks(registration, event, router);
+                        continue;
+                    }
 
-                    // Check if any content handler methods are available
-                    if (router.hasContentMethods()) {
-                        // Process content-based callbacks with routing (includes added files and deleted files)
-                        processContentBasedCallbacks(service, event, router);
-                    } else if (onFileDeletedMethodType.isPresent()) {
-                        // Service has only onFileDeleted method (no content methods)
-                        // Process deleted files directly
+                    if (registration.getOnFileDeletedMethod().isPresent()) {
                         if (!event.getDeletedFiles().isEmpty()) {
-                            processFileDeletedCallback(service, event, onFileDeletedMethodType.get());
+                            processFileDeletedCallback(service, event, registration.getOnFileDeletedMethod().get());
                         }
-                        // For added files, fall back to onFileChange if present
                         if (!event.getAddedFiles().isEmpty()) {
-                            Optional<MethodType> onFileChangeMethodType = getOnFileChangeMethod(service);
-                            if (onFileChangeMethodType.isPresent()) {
-                                processMetadataOnlyCallbacks(service, event, onFileChangeMethodType.get());
-                            }
+                            registration.getOnFileChangeMethod()
+                                    .ifPresent(methodType -> processMetadataOnlyCallbacks(service, event, methodType));
                         }
+                        continue;
+                    }
+
+                    if (registration.getOnFileChangeMethod().isPresent()) {
+                        processMetadataOnlyCallbacks(service, event, registration.getOnFileChangeMethod().get());
                     } else {
-                        // Fall back to traditional onFileChange
-                        Optional<MethodType> onFileChangeMethodType = getOnFileChangeMethod(service);
-                        if (onFileChangeMethodType.isPresent()) {
-                            processMetadataOnlyCallbacks(service, event, onFileChangeMethodType.get());
-                        } else {
-                            log.error("No valid remote method found in service");
-                        }
+                        log.error("No valid remote method found in service {}", service.getType().getName());
                     }
                 }
             } else {
@@ -144,8 +142,9 @@ public class FtpListener implements RemoteFileSystemListener {
      * Uses ContentMethodRouter to dispatch files to appropriate handlers.
      * Also handles file deletion events via onFileDeleted method if available.
      */
-    private void processContentBasedCallbacks(BObject service, RemoteFileSystemEvent event,
+    private void processContentBasedCallbacks(ServiceRegistration registration, RemoteFileSystemEvent event,
                                               ContentMethodRouter router) {
+        BObject service = registration.getService();
         // Process added files with content methods
         if (!event.getAddedFiles().isEmpty()) {
             if (fileSystemManager == null || fileSystemOptions == null) {
@@ -153,8 +152,7 @@ public class FtpListener implements RemoteFileSystemListener {
                         "Content methods require proper FileSystem initialization. Skipping added files processing.");
             } else {
                 try {
-                    FtpContentCallbackHandler contentHandler = new FtpContentCallbackHandler(
-                            runtime, fileSystemManager, fileSystemOptions);
+                    FtpContentCallbackHandler contentHandler = getContentCallbackHandler();
                     contentHandler.processContentCallbacks(service, event, router, caller);
                 } catch (Exception e) {
                     log.error("Error in content callback processing for added files", e);
@@ -164,7 +162,7 @@ public class FtpListener implements RemoteFileSystemListener {
 
         // Process deleted files with onFileDeleted method if available
         if (!event.getDeletedFiles().isEmpty()) {
-            Optional<MethodType> onFileDeletedMethodType = getOnFileDeletedMethod(service);
+            Optional<MethodType> onFileDeletedMethodType = registration.getOnFileDeletedMethod();
             if (onFileDeletedMethodType.isPresent()) {
                 processFileDeletedCallback(service, event, onFileDeletedMethodType.get());
             } else {
@@ -273,6 +271,24 @@ public class FtpListener implements RemoteFileSystemListener {
             }
         });
 
+    }
+
+    private FtpContentCallbackHandler getContentCallbackHandler() {
+        if (fileSystemManager == null || fileSystemOptions == null) {
+            throw new IllegalStateException("File system configuration is not initialized");
+        }
+        FtpContentCallbackHandler handler = this.contentCallbackHandler;
+        if (handler == null) {
+            synchronized (this) {
+                handler = this.contentCallbackHandler;
+                if (handler == null) {
+                    handler = new FtpContentCallbackHandler(runtime, fileSystemManager, fileSystemOptions,
+                            laxDataBinding);
+                    this.contentCallbackHandler = handler;
+                }
+            }
+        }
+        return handler;
     }
 
     private BMap<BString, Object> getWatchEvent(Parameter parameter, Map<String, Object> parameters) {
@@ -384,9 +400,9 @@ public class FtpListener implements RemoteFileSystemListener {
 
     @Override
     public BError done() {
-        Set<Map.Entry<String, BObject>> serviceEntries = registeredServices.entrySet();
-        for (Map.Entry<String, BObject> serviceEntry : serviceEntries) {
-            BObject service = serviceEntry.getValue();
+        Set<Map.Entry<String, ServiceRegistration>> serviceEntries = registeredServices.entrySet();
+        for (Map.Entry<String, ServiceRegistration> serviceEntry : serviceEntries) {
+            BObject service = serviceEntry.getValue().getService();
             try {
                 Object serverConnectorObject = service.getNativeData(FtpConstants.FTP_SERVER_CONNECTOR);
                 if (serverConnectorObject instanceof RemoteFileSystemServerConnector) {
@@ -410,7 +426,7 @@ public class FtpListener implements RemoteFileSystemListener {
     protected void addService(BObject service) {
         Type serviceType = TypeUtils.getType(service);
         if (service != null && serviceType != null && serviceType.getName() != null) {
-            registeredServices.put(serviceType.getName(), service);
+            registeredServices.put(serviceType.getName(), new ServiceRegistration(service));
         }
     }
 
@@ -420,5 +436,47 @@ public class FtpListener implements RemoteFileSystemListener {
 
     public BObject getCaller() {
         return caller;
+    }
+
+    /**
+     * Holds cached information about a registered FTP service.
+     */
+    private static final class ServiceRegistration {
+
+        private final BObject service;
+        private final MethodType[] contentMethods;
+        private final Optional<MethodType> onFileChangeMethod;
+        private final Optional<MethodType> onFileDeletedMethod;
+        private ContentMethodRouter router;
+
+        private ServiceRegistration(BObject service) {
+            this.service = service;
+            this.contentMethods = FtpUtil.getAllContentHandlerMethods(service);
+            this.onFileChangeMethod = getOnFileChangeMethod(service);
+            this.onFileDeletedMethod = getOnFileDeletedMethod(service);
+        }
+
+        BObject getService() {
+            return service;
+        }
+
+        boolean hasContentMethods() {
+            return contentMethods.length > 0;
+        }
+
+        Optional<MethodType> getOnFileChangeMethod() {
+            return onFileChangeMethod;
+        }
+
+        Optional<MethodType> getOnFileDeletedMethod() {
+            return onFileDeletedMethod;
+        }
+
+        ContentMethodRouter getOrCreateRouter() {
+            if (router == null) {
+                router = new ContentMethodRouter(service, contentMethods);
+            }
+            return router;
+        }
     }
 }
